@@ -36,3 +36,10 @@ static void DrawPoint(int x, int y) {
 static void DrawPoint(SDL_Point& point) {
 	DrawPoint(point.x, point.y);
 }
+
+static void DrawLine(int x1, int y1, int x2, int y2) {
+	SDL_RenderDrawLine(gameRenderer, x1, y1, x2, y2);
+}
+static void DrawLine(SDL_Point& point1, SDL_Point& point2) {
+	DrawLine(point1.x, point1.y, point2.x, point2.y);
+}

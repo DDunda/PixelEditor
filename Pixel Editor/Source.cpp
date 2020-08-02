@@ -15,9 +15,21 @@
 
 #define swap(a,b) a ^= (b ^= (a ^= b))
 
+#define TRANSPARENT_CHECKER_1 (0xFFFFFFFF)
+#define TRANSPARENT_CHECKER_2 (0xFFBFBFBF)
+#define SHADOW (0x7F000000)
+
 using namespace SDLG;
 
 int main(int argc, char* argv[]) { return StartSDL(); }
+
+void DrawTexture(SDL_Texture* txt, SDL_FRect dst) {
+	SDL_RenderCopyF(gameRenderer, txt, NULL, &dst);
+}
+
+void DrawTexture(SDL_Texture* txt, SDL_Rect dst) {
+	SDL_RenderCopy(gameRenderer, txt, NULL, &dst);
+}
 
 struct textCharacter {
 	SDL_Rect src;
@@ -54,16 +66,16 @@ public:
 SDL_Rect ToRect(SDL_FRect rect) {
 	return { (int)round(rect.x), (int)round(rect.y), (int)round(rect.w), (int)round(rect.h) };
 }
-SDL_FRect GetFrameRect(frame* f) {
+SDL_FRect GetFrameRect(frame& f) {
 	SDL_FRect parentRect;
 
-	if (f->parent == NULL) parentRect = { 0, 0, (float)windowWidth, (float)windowHeight };
-	else parentRect = GetFrameRect(f->parent);
+	if (f.parent == NULL) parentRect = { 0, 0, (float)windowWidth, (float)windowHeight };
+	else parentRect = GetFrameRect(*f.parent);
 
-	float width = f->relativeScale.x * parentRect.w + f->absoluteScale.x;
-	float height = f->relativeScale.y * parentRect.h + f->absoluteScale.y;
-	float x = parentRect.x + parentRect.w * f->parentRelativeOrigin.x - width * f->selfRelativeOrigin.x + f->absoluteOffset.x;
-	float y = parentRect.y + parentRect.h * f->parentRelativeOrigin.y - height * f->selfRelativeOrigin.y + f->absoluteOffset.y;
+	float width = f.relativeScale.x * parentRect.w + f.absoluteScale.x;
+	float height = f.relativeScale.y * parentRect.h + f.absoluteScale.y;
+	float x = parentRect.x + parentRect.w * f.parentRelativeOrigin.x - width * f.selfRelativeOrigin.x + f.absoluteOffset.x;
+	float y = parentRect.y + parentRect.h * f.parentRelativeOrigin.y - height * f.selfRelativeOrigin.y + f.absoluteOffset.y;
 
 	return { x,y,width,height };
 }
@@ -71,11 +83,11 @@ SDL_FRect GetFrameRect(frame* f) {
 void RenderSprite(sprite& src, frame& dst) {
 	if (src.texture == NULL || *src.texture == NULL) {
 		SetDrawColour(255, 0, 255); // A simple magenta box
-		FillRect(GetFrameRect(&dst));
+		FillRect(GetFrameRect(dst));
 		return;
 	}
 
-	SDL_FRect dstRect = GetFrameRect(&dst);
+	SDL_FRect dstRect = GetFrameRect(dst);
 
 	SDL_RenderCopyF(gameRenderer, *src.texture, &src.src, &dstRect);
 }
@@ -104,15 +116,6 @@ protected:
 	}
 
 public:
-
-	void DrawTexture(SDL_FRect dst) {
-		SDL_RenderCopyF(gameRenderer, renderedSurface, NULL, &dst);
-	}
-
-	void DrawTexture(SDL_Rect dst) {
-		SDL_RenderCopy(gameRenderer, renderedSurface, NULL, &dst);
-	}
-
 	unsigned GetImageWidth() {
 		return width;
 	}
@@ -122,7 +125,7 @@ public:
 	}
 
 	SDL_Rect GetBounds() {
-		return ToRect(GetFrameRect(&canvasArea));
+		return ToRect(GetFrameRect(canvasArea));
 	}
 
 	void RenderCanvas() {
@@ -140,6 +143,10 @@ public:
 		rendered = true;
 		SDL_Surface* tmpSurface = SDL_ConvertSurfaceFormat(surface, SDL_PIXELFORMAT_RGBA32, 0);
 		SDL_UpdateTexture(renderedSurface, NULL, tmpSurface->pixels, tmpSurface->pitch);
+	}
+
+	SDL_Colour GetPaletteColour(Uint8 index) {
+		return palette[index];
 	}
 
 	void SetPaletteColour(SDL_Colour colour, Uint8 index) {
@@ -238,7 +245,7 @@ public:
 
 	void render(SDL_Renderer* r) {
 		if(!rendered) RenderCanvas();
-		DrawTexture(GetFrameRect(&canvasArea));
+		DrawTexture(renderedSurface,GetFrameRect(canvasArea));
 	}
 
 	void Fill(int x, int y, Uint8 newColour) {
@@ -309,7 +316,7 @@ public:
 	}
 
 	SDL_Point MapToTexture(SDL_Point screenspace) {
-		SDL_FRect canvasBounds = GetFrameRect(&canvasArea);
+		SDL_FRect canvasBounds = GetFrameRect(canvasArea);
 		return{
 			(screenspace.x - (int)canvasBounds.x) * (int)width / (int)canvasBounds.w,
 			(screenspace.y - (int)canvasBounds.y) * (int)height / (int)canvasBounds.h
@@ -325,7 +332,143 @@ public:
 	}
 };
 
+class PaletteRenderer : public RenderableElement {
+protected:
+	SDL_FRect frameRect{ 0,0,0,0 };
+	frame drawFrame;
+	SDL_Colour pPalette[256];
+	SDL_Surface* rawPaletteSurface;
+	SDL_Texture* paletteArea = NULL;
+	SDL_Texture* transparentLayer = NULL;
+	SDL_Colour gridColour = {12, 23, 39, 255};
+
+	unsigned scale = 0;
+
+	void CreatePaletteSurface() {
+		rawPaletteSurface = SDL_CreateRGBSurface(0, 16, 16, 8, 0, 0, 0, 0);
+		if (rawPaletteSurface->format->palette == NULL) SDL_SetSurfacePalette(rawPaletteSurface, SDL_AllocPalette(256));
+		SDL_SetPaletteColors(rawPaletteSurface->format->palette, pPalette, 0, 256);
+		Uint8* ptr = (Uint8*)(rawPaletteSurface->pixels);
+		for (int i = 0; i < 256; i++) *(ptr++) = i;
+	}
+
+	void RenderPalette() {
+		SDL_SetPaletteColors(rawPaletteSurface->format->palette, pPalette, 0, 256);
+
+		SDL_Surface* tmpSurface = SDL_CreateRGBSurfaceWithFormat(0, 16, 16, 32, SDL_PIXELFORMAT_RGBA32);
+		SDL_FillRect(tmpSurface, NULL, 0);
+		SDL_Rect src{ 0,0,16,16 };
+		SDL_BlitSurface(rawPaletteSurface, &src, tmpSurface, &src);
+		
+		if (paletteArea != NULL) SDL_DestroyTexture(paletteArea);
+
+		paletteArea = SDL_CreateTextureFromSurface(gameRenderer, tmpSurface);
+		SDL_SetTextureBlendMode(paletteArea, SDL_BlendMode::SDL_BLENDMODE_BLEND);
+		SDL_FreeSurface(tmpSurface);
+	}
+
+	void RenderTransparentLayer() {
+		if (transparentLayer != NULL) return;
+
+		SDL_Surface* tmpSurface = SDL_CreateRGBSurfaceWithFormat(0, 32, 32, 32, SDL_PIXELFORMAT_RGBA32);
+
+		Uint32* pixels = (Uint32*)(tmpSurface->pixels);
+		for (int y = 0; y < 32; y++)
+			for (int x = 0; x < 32; x++)
+				*(pixels++) = (x ^ y) & 1 ? TRANSPARENT_CHECKER_1 : TRANSPARENT_CHECKER_2;
+
+		transparentLayer = SDL_CreateTextureFromSurface(gameRenderer, tmpSurface);
+		SDL_SetTextureBlendMode(transparentLayer, SDL_BlendMode::SDL_BLENDMODE_BLEND);
+	}
+
+	bool PaletteChanged() {
+		bool changes;
+		for (int i = 0; i < 256; i++) {
+			SDL_Colour pColour = pPalette[i];
+			SDL_Colour colour = parent->GetPaletteColour(i);
+			if (
+				pColour.r != colour.r ||
+				pColour.g != colour.g ||
+				pColour.b != colour.b ||
+				pColour.a != colour.a
+				) {
+				changes = true;
+				pPalette[i] = colour;
+			}
+		}
+		return changes;
+	}
+
+	void DrawGrid() {
+		SetDrawColour(gridColour);
+
+		SDL_Point upperleft = { frameRect.x, frameRect.y };
+
+		// Horizontal
+		for (int y = 0; y < 17; y++) DrawLine(upperleft.x, upperleft.y + y * 17, upperleft.x + 272, upperleft.y + y * 17);
+
+		// Vertical
+		for (int x = 0; x < 17; x++) DrawLine(upperleft.x + x * 17, upperleft.y, upperleft.x + x * 17, upperleft.y + 272);
+	}
+
+	void DrawShadow() {
+		SDL_SetRenderDrawBlendMode(gameRenderer, SDL_BLENDMODE_BLEND);
+		SetDrawColour(shadowColour);
+
+		FillRect(SDL_FRect{
+			frameRect.x + shadowOffset.x,
+			frameRect.y + shadowOffset.y,
+			frameRect.w,
+			frameRect.h
+			});
+	}
+
+public:
+	DrawCanvas* parent;
+	bool visible = true;
+	SDL_Colour shadowColour = {0,0,0,127};
+	SDL_FPoint shadowOffset = {8,8};
+
+	void SetScale(unsigned s) {
+		if (s != scale) {
+			drawFrame = {
+				{1, 1},
+				{1, 1},
+
+				{0,0},
+
+				{ s * 16.0f + 1, s * 16.0f + 1 },
+				{ -16, -16 }
+			};
+		}
+	}
+
+	PaletteRenderer(DrawCanvas& p, unsigned s = 17) : parent(&p) {
+		RenderTransparentLayer();
+		CreatePaletteSurface();
+		RenderPalette();
+
+		SetScale(s);
+	}
+
+	~PaletteRenderer() {
+		SDL_DestroyTexture(paletteArea);
+		SDL_DestroyTexture(transparentLayer);
+		SDL_FreeSurface(rawPaletteSurface);
+	}
+
+	void render(SDL_Renderer* r) {
+		if (PaletteChanged()) RenderPalette();
+		frameRect = GetFrameRect(drawFrame);
+		DrawShadow();
+		DrawTexture(transparentLayer, frameRect);
+		DrawTexture(paletteArea, frameRect);
+		DrawGrid();
+	}
+};
+
 DrawCanvas* canvas;
+PaletteRenderer* palette;
 
 enum class ToolType {
 	Pencil,
@@ -525,7 +668,7 @@ void DoLogic() {
 	case ScreenState::CreateImage:
 		break;
 	case ScreenState::DrawImage:
-		canvas->SetPaletteColour(HSVColour(currentTime / 10, 1, 1), 1);
+		canvas->SetPaletteColour(HSVColour(currentTime * (6 * 256) / 5000, 1, 1), 1);
 		DrawLogic();
 		break;
 	}
@@ -549,7 +692,7 @@ void DoDraw() {
 		};
 
 		SetDrawColour(145, 145, 145);
-		FillRect(GetFrameRect(&Rect1Border));
+		FillRect(GetFrameRect(Rect1Border));
 
 		frame Rect1Fill = {
 			{0.5f,  0.5f},
@@ -564,7 +707,7 @@ void DoDraw() {
 		};
 
 		SetDrawColour(81, 81, 81);
-		FillRect(GetFrameRect(&Rect1Fill));
+		FillRect(GetFrameRect(Rect1Fill));
 	}
 		 break;
 
@@ -592,6 +735,8 @@ void SDLG::OnStart() {
 	minFrameDelta = 1000 / 60;
 	gameState = ScreenState::DrawImage;
 	canvas = new DrawCanvas(100, 100);
+
+	palette = new PaletteRenderer(*canvas);
 }
 
 void SDLG::OnFrame() {
