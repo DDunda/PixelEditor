@@ -465,6 +465,10 @@ public:
 		DrawTexture(paletteArea, frameRect);
 		DrawGrid();
 	}
+
+	SDL_Rect GetBounds() {
+		return ToRect(GetFrameRect(drawFrame));
+	}
 };
 
 DrawCanvas* canvas;
@@ -482,6 +486,8 @@ Uint8 RightColour = 2;
 bool LeftDrawing = false;
 bool RightDrawing = false;
 
+int mouseTarget = 0;
+
 void DisablePencil() {
 	LeftDrawing = false;
 	RightDrawing = false;
@@ -498,34 +504,33 @@ void PencilLogic() {
 
 	bool mouseMovement = mouseXDelta || mouseYDelta;
 
-	if (!RightDrawing && buttonPressed(SDL_BUTTON_LEFT) && InBounds(canvasBounds, mouseX, mouseY)) {
+	if (mouseTarget == 1 && !RightDrawing && buttonPressed(SDL_BUTTON_LEFT)) {
 		LeftDrawing = true;
 
 		SDL_Point coords = canvas->MapToTexture({ mouseX, mouseY });
 
 		canvas->DrawPoint(LeftColour, coords.x, coords.y);
 	}
-	if (buttonReleased(SDL_BUTTON_LEFT)) {
+	if (LeftDrawing && buttonReleased(SDL_BUTTON_LEFT)) {
 		LeftDrawing = false;
 	}
-	if (LeftDrawing && mouseMovement) {
+	if (mouseTarget == 1 && LeftDrawing && mouseMovement) {
 		SDL_Point coords1 = canvas->MapToTexture({ mouseXPrev, mouseYPrev });
 		SDL_Point coords2 = canvas->MapToTexture({ mouseX, mouseY });
 
 		canvas->DrawLine(coords1.x, coords1.y, coords2.x, coords2.y, LeftColour);
 	}
-
-	if (!LeftDrawing && buttonPressed(SDL_BUTTON_RIGHT) && InBounds(canvasBounds, mouseX, mouseY)) {
+	if (mouseTarget == 1 && !LeftDrawing && buttonPressed(SDL_BUTTON_RIGHT)) {
 		RightDrawing = true;
-		canvas->DrawPoint(RightColour,
-			(mouseX - canvasBounds.x) * canvas->GetImageWidth() / canvasBounds.w,
-			(mouseY - canvasBounds.y) * canvas->GetImageHeight() / canvasBounds.h
-		);
+
+		SDL_Point coords = canvas->MapToTexture({ mouseX, mouseY });
+
+		canvas->DrawPoint(RightColour, coords.x, coords.y);
 	}
-	if (RightDrawing && buttonReleased(SDL_BUTTON_RIGHT)) {
+	if (buttonReleased(SDL_BUTTON_RIGHT) && RightDrawing) {
 		RightDrawing = false;
 	}
-	if (RightDrawing && mouseMovement) {
+	if (mouseTarget == 1 && RightDrawing && mouseMovement) {
 
 		int mX1 = (mouseXPrev - canvasBounds.x) * (int)canvas->GetImageWidth() / canvasBounds.w;
 		int mX2 = (mouseX - canvasBounds.x) * (int)canvas->GetImageWidth() / canvasBounds.w;
@@ -538,10 +543,9 @@ void PencilLogic() {
 }
 
 void FillLogic() {
-	SDL_Rect canvasBounds = canvas->GetBounds();
-	SDL_Point coords = canvas->MapToTexture({ mouseX,mouseY });
+	if (mouseTarget != 1) return;
 
-	if (!InBounds(canvasBounds, mouseX, mouseY)) return;
+	SDL_Point coords = canvas->MapToTexture({ mouseX,mouseY });
 
 	if (buttonPressed(SDL_BUTTON_LEFT))
 		canvas->Fill(coords.x, coords.y, LeftColour);
@@ -601,7 +605,7 @@ void DrawLogic() {
 	}
 }
 
-SDL_Colour HSVColour(int hue, float saturation, float value) {
+SDL_Colour HSVColour(float h, float saturation, float value) {
 	//   _    _
 	//R:  \__/
 
@@ -612,6 +616,8 @@ SDL_Colour HSVColour(int hue, float saturation, float value) {
 	//B: __/  \
 
 	//Hue ->
+
+	int hue = ((int)floor(h * 1536)) % 1536;
 
 	Uint8 R = 0, G = 0, B = 0;
 	hue = (hue % (255 * 6)) + (255 * 6) % (255 * 6);
@@ -663,12 +669,17 @@ void DoLogic() {
 	if (keyPressed(SDLK_p))
 		SwitchTool(ToolType::Pencil);
 
+	mouseTarget = 0;
+	SDL_Point mousePos = { mouseX, mouseY };
+	if (InBounds(canvas->GetBounds(), mousePos)) mouseTarget = 1;
+	if (InBounds(palette->GetBounds(), mousePos)) mouseTarget = 2;
+
 	switch (gameState)
 	{
 	case ScreenState::CreateImage:
 		break;
 	case ScreenState::DrawImage:
-		canvas->SetPaletteColour(HSVColour(currentTime * (6 * 256) / 5000, 1, 1), 1);
+		canvas->SetPaletteColour(HSVColour(currentTime / 5000.0, 1, 1), 1);
 		DrawLogic();
 		break;
 	}
